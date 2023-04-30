@@ -1,0 +1,422 @@
+//microcrontroller is an Arduino Mega 2560 rev 3
+//the motor driver implemented is a cytron MDD10A REV2.0
+
+//define pins microcontroller will use during program
+#define led 12    //designated pin for LED
+#define button 2  //designated pin for button
+#define dir 8     //designated pin for direction control, changes direction based on HIGH or LOW outputs
+#define pwm 7     //designated pin for Pulse Width Modulation (PWM) control 
+
+//global variables
+bool buttonPressed = false;       //has button been pressed?
+unsigned int buttonCount = 0;     //how many times the button has been pressed
+int oldButtonCount = 0;           //used to display button count when it changes
+int fadeCount = 255;              //used to gradually change PWM duty cycle, in this case to fade the LED on or off, or ramp up/down the motor
+bool ledState = true;             //was the LED last on or off
+bool motorSpeedDir = true;        //is the motor speeding up or ramping down
+unsigned long oldTime = 0;        //used to determine the time between PWM changes
+int x = 0;                        //LED count for case 9
+int state = 0;                    //store the current state of the program
+//for case 11
+const int pwmIncrement = 64;      //25% of 255 is 64
+int pwmValue = 0;
+unsigned long stateStartTime = 0; //stores the start time of the state
+unsigned long lastButtonPress = 0;//stores the time of the last button press
+
+//Setup process that initialises different components of the microcontroller and the code. Runs once at the start of the program.
+void setup()
+{
+  Serial.begin(9600);     //Initialises the USART to a BAUD Rate of 9600
+  pinMode(led, OUTPUT);   //set the data direction of the LED pin as an output
+  pinMode(button, INPUT); //set the data direction of the button pin as an output
+  pinMode(pwm, OUTPUT);   // sets the data direction of the PWM pin as an output
+  pinMode(dir, OUTPUT);   // sets the data direction of the motor driver direction pin as an output
+
+  //initialises the motor in the off state
+  digitalWrite(dir, HIGH); 
+  analogWrite(pwm, 0);
+
+  digitalWrite(led, HIGH); //initialise the LED as off
+
+  attachInterrupt(digitalPinToInterrupt(button), buttonPressedFunction, RISING); 
+  //attach an interrupt to the button to be triggered on a rising edge
+}
+void loop ()
+{
+  switch (state)
+  {
+      case 0:
+        //executed code
+        //LED must turn on
+        //transistion to the next state at the press of a button
+        //Serial.println("this is case 0");                       //declares the state in serial monitor
+        digitalWrite(led, LOW);                                 //turn on the LED
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                                     //reset global variables
+          Serial.println("moving to case 1");
+          analogWrite(pwm,0);
+          state++;                                              //go to next state
+        }
+        break;
+
+      case 1:
+        //LED must turn off
+        //transistion to the next state at the press of a button
+        //Serial.println("this is case 1");                       //declares the state in serial monitor
+        digitalWrite(led, HIGH);
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                                     //reset global variables
+          fadeCount = 255;
+           Serial.println("moving to case 2");
+          state++;                                              //go to next state
+        }
+        break;
+
+      case 2:
+        //LED must fade on
+        //transistion when full brightness
+        //Serial.println("this is case 2");                       //declares the state in serial monitor
+        //make sure enough time has passed so we can see the fade
+        if (millis() > oldTime + 5)
+        {
+          oldTime = millis();               //store the current time so we wait next time
+          fadeCount--;                      //decrement the counter so we remember how much the LED is on (remember, the longer the pin is higher, the longer the LED is off)
+          analogWrite(led, fadeCount);      //set the duty cycle at the pin
+        }
+        //if the LED has faded on
+        if (fadeCount <= 0)
+        {
+          resetVariables();                 //reset global varibles so next state starts fresh
+           Serial.println("moving to case 3");
+          state++;                          //go to the next state
+        }        
+
+        break;
+
+      case 3:
+        //LED must fade off
+        //transistion when fully off
+        //Serial.println("this is case 3");                       //declares the state in serial monitor
+        //make sure enough time has passed so we can see the fade
+        if (millis() > oldTime + 5)
+        {
+          oldTime = millis();               //store the current time so we wait next time
+          fadeCount++;                      //decrement the counter so we remember how much the LED is on (remember, the longer the pin is higher, the longer the LED is off)
+          analogWrite(led, fadeCount);      //set the duty cycle at the pin
+        }
+        //if the LED has faded on
+        if (fadeCount >= 255)
+        {
+          resetVariables();                 //reset global varibles so next state starts fresh
+          Serial.println("moving to case 4");
+          state++;                          //go to the next state          
+        } 
+
+        break;   
+
+      case 4:
+        //LED must flash at 2Hz (250ms on and 250ms off)
+        //state must transistion at the push of a button
+        //Serial.println("this is case 4");                       //declares the state in serial monitor
+        //has 250ms passed?
+        if (millis() > oldTime + 250)
+        {
+          oldTime = millis();               //store the current time
+          ledState = !ledState;             //toggle the current state of the LED
+          digitalWrite(led, ledState);      //set the LED to the current state
+        }
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 5");
+          state++;                          //go to next state
+        }
+        break;
+
+      case 5:
+        //The motor must continously speed up and down, taking 3 seconds for a full cycle (3 seconds up, 3 seconds down)
+        //state must transistion at the push of a button
+        //Serial.println("this is case 5");                       //declares the state in serial monitor
+        //to take 3 seconds, the PWM needs to increment every 3000/255 = ~11ms
+        if (millis() > oldTime + 11)
+        {
+          oldTime = millis();                //store the current time
+          
+          if (motorSpeedDir)                //if the motor is getting faster
+          {
+            fadeCount++;                    //increase the PWM
+          }
+          else
+          {
+            fadeCount--;                    //decrease the PWM
+          }
+          
+          //if fadeCount has reached either extreme
+          if (fadeCount >= 255 || fadeCount <= 0)
+          {
+            motorSpeedDir = !motorSpeedDir; //flip the direction the motor is going
+          }
+
+          //set motor forwards
+          digitalWrite(dir, LOW);           
+          analogWrite(pwm, fadeCount);      //set the PWM of the motor  
+        }
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 6");
+          analogWrite(pwm,0);               //set motor PWM 0
+          state++;                          //go to next state
+        }
+
+        break;
+      
+      case 6:
+        //motor must stop
+        //state must transition at the push of a button
+        //Serial.println("this is case 6");                       //declares the state in serial monitor
+        analogWrite(pwm, 0);                //set motor PWM 0
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 7");
+          state++;                          //go to next state
+        }        
+
+        break;
+
+      case 7:
+        //the motor must continously spin up and down, taking three seconds for a full cycle in, in the OPPOsite direction to state 5
+        //the state must transition at the push of a button
+        //Serial.println("this is case 7");                       //declares the state in serial monitor
+        //to take 3 seconds, the PWM needs to increment every 3000/255 = ~11ms
+        if (millis() > oldTime + 11)
+        {
+          oldTime = millis();                //store the current time
+          
+          if (motorSpeedDir)                //if the motor is getting faster
+          {
+            fadeCount++;                    //increase the PWM
+          }
+          else
+          {
+            fadeCount--;                    //decrease the PWM
+          }
+          
+          //if fadeCount has reached either extreme
+          if (fadeCount >= 255 || fadeCount <= 0)
+          {
+            motorSpeedDir = !motorSpeedDir; //flip the direction the motor is going
+          }
+
+          //set motor forwards
+          digitalWrite(dir, HIGH);           
+          analogWrite(pwm, fadeCount);      //set the PWM of the motor  
+        }
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 8");
+          analogWrite(pwm, 0);               //set motor PWM 0
+          state++;                          //go to next state
+        }
+
+        break;
+
+      case 8:
+        //motor must stop
+        //state must transition at the push of a button
+        //Serial.println("this is case 8");                       //declares the state in serial monitor
+        analogWrite(pwm,0);                //set motor PWM 0
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 9");
+          state++;                          //go to next state
+        }        
+
+        break;
+
+      case 9:
+        //LED must flash 5 times (1 flash = on and off) without using delays. The LED cannot flash anymore times in this state.
+        //the state is transistioned using a single press of the button
+        //the state must be ably to transition at any time
+        //Serial.println("this is case 9");                       //declares the state in serial monitor
+        //counts through to 10 to flash led 5 times
+        if (x <= 10)
+        {
+          if (millis() > oldTime + 500)
+          {
+            oldTime = millis();               //store the current time
+            ledState = !ledState;             //toggle the current state of the LED
+            digitalWrite(led, ledState);      //set the LED to the current state
+            x++;
+          }
+        }
+        //has the button been pressed?
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 10");
+          state++;                          //go to next state
+        }   
+        break;
+
+      case 10:
+        //must flash led until button is pressed 5 times. the amount of times the LED flashes must be printed to the UART once before the state transistions
+        //Serial.println("this is case 10");                       //declares the state in serial monitor
+        int flashCount = 0;
+        // oldButtonCount = buttonCount;
+
+        
+          if (millis() > oldTime + 500)
+          {
+            oldTime = millis();               //store the current time
+            ledState = !ledState;             //toggle the current state of the LED
+            digitalWrite(led, ledState);      //set the LED to the current state
+            flashCount += ledState;           //increments flash count every time LED turns on, hopefully
+          }
+
+        while (oldButtonCount <5)
+        {
+            //flashes led continously
+          if (millis() > oldTime + 500)
+          {
+            oldTime = millis();               //store the current time
+            ledState = !ledState;             //toggle the current state of the LED
+            digitalWrite(led, ledState);      //set the LED to the current state
+            flashCount += ledState;           //increments flash count every time LED turns on, hopefully
+          }
+          if (buttonPressed == true)
+          {
+          resetVariables();                 //reset global variables
+          oldButtonCount++;                 //inmcrements button count by one
+          }
+        }
+        //if (oldButtonCount <= 5)
+        //{
+          //prints LED flashes to UART
+          
+          Serial.print("The LED flashed ");   
+          Serial.print(flashCount);
+          Serial.println(" times.");
+          Serial.println("moving to case 11"); //prints transition
+          
+          //stateStartTime = millis();
+          resetVariables();                    //reset global variables
+          state++;                             //transitions to the next state. BUT IT WON'T FOR SOME GODDAMN REASON!
+          Serial.println(state);                       //declares the state in serial monitor
+          /*I have tried for 8 hours now to get the damn thing to move over, i don't know what is wrong with it it prints the lines to the serial monitor so why doesn't it transition FUCK!*/
+        //}
+        break;
+
+      case 11:
+        //must flash LED at 1hz and the duty cycle to the motor must increment by 25% every 250ms
+        //Once the motor has reached 100% duty cycle, it should decrement by 25%  every 250ms until it reaches 0% (and so on).
+        //No delays may be used (grumble grumble).
+        //When the button is pressed, the motor and LED should stop and the state should be switched back to the original state (state 0)
+
+        // if (millis() > oldTime + 500)
+        // {
+        //   oldTime = millis();               //store the current time
+        //   ledState = !ledState;             //toggle the current state of the LED
+        //   digitalWrite(led, ledState);      //set the LED to the current state
+        // }
+      
+        Serial.println("welcome to case 11");
+          Serial.println(state);
+        /*
+        if (millis() > oldTime + 250)
+        {
+          oldTime = millis();                //store the current time
+          Serial.println("moving to case choosing PWM");
+          if (motorSpeedDir)                //if the motor is getting faster
+          {
+            fadeCount += pwmIncrement;                    //increase the PWM
+            Serial.println("increasing PWM!");
+          }
+          else
+          {
+            fadeCount-= pwmIncrement;                    //decrease the PWM
+            Serial.println("deacreasing PWM!");
+          }
+          
+          //if fadeCount has reached either extreme
+          if (fadeCount >= 255 || fadeCount <= 0)
+          {
+            motorSpeedDir = !motorSpeedDir; //flip the direction the motor is going
+            Serial.println("ramping up/down!");
+          }
+
+          //set motor forwards
+          digitalWrite(dir, HIGH);           
+          analogWrite(pwm, fadeCount);      //set the PWM of the motor  
+        }
+        //has button been pressed
+        if (buttonPressed == true)
+        {
+          resetVariables();                 //reset global variables
+          Serial.println("moving to case 0");
+          state = 0;                          //go to next state
+        }   
+        */
+        state = 0;
+        break;
+  }
+}
+  
+  
+      // case 11:
+      //   //state must start with the motor off. the PWM for the motor must increment by 25% every time a button is pressed.
+      //   //if the duty cycle is at 100% the duty cycle must be decremented by 25%.
+      //   //if the duty cycle reaches zero pressing the button must increment the duty cycle again until it reaches 100%. gosh
+      //   //after 16 seconds the state must transition to the next state.
+
+      //   if (digitalRead(button), HIGH)
+      //   {
+      //       Serial.println("oh my god it works!");
+      //   }
+
+      //   //if 16 seconds has passed
+      //   if (millis() > oldTime + 5000)
+      //   {
+      //         resetVariables();                 //reset global variables
+      //         pwmValue = 0;
+      //         motorSpeedDir = true;
+      //         Serial.println("moving to case 0"); //prints transition
+      //         state = 0;
+
+      //   }
+
+      //   break;
+
+void resetVariables()             //resets global values for each case
+{
+  buttonPressed = false;          //reset the button back to 0 so that the next state doesn't increment straight away
+  fadeCount = 0;                  // make sure fade count is at 0
+  motorSpeedDir = true;           //re-initialises the motor to oging forwards
+  oldTime = millis();             //reset the timer back to 0 so the next state starts fresh
+  x = 0;                          //reset LED count for case 9
+  pwmValue = 0;
+  //turns off the motor
+  analogWrite(pwm, 0);            //sets the PWM of the motor to 0   
+}
+
+
+void buttonPressedFunction()
+{
+  buttonCount++;
+  buttonPressed = true;
+  Serial.println(buttonCount);
+}
+
+
